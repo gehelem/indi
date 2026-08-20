@@ -202,16 +202,23 @@ int SkyRenderer::drawDonutStar(INDI::CCDChip *chip, float mag, float x, float y,
     // distance from focus -- this is what turns a defocused star into a donut, well
     // before diffraction effects would matter.
     float const rOuterArcsec = m_Cfg.donutDefocusSlope * std::fabs(m_Cfg.donutTicks);
-    float const rInnerArcsec = rOuterArcsec * m_Cfg.donutObstruction;
 
-    // Collimation error: a fixed shift of the secondary's shadow relative to the
-    // primary aperture, independent of the star's field position. It only affects
-    // which rays are physically blocked (see the exclusion test below), not where an
-    // unblocked ray lands -- a tilted secondary doesn't move the star itself. It
-    // flips sign between intra- and extra-focal, unlike field coma below.
-    float const collimSign = m_Cfg.donutTicks >= 0.0f ? 1.0f : -1.0f;
-    float const shadowOffsetX = m_Cfg.donutCollimDx * collimSign;
-    float const shadowOffsetY = m_Cfg.donutCollimDy * collimSign;
+    // Collimation error, modeled as two right circular cones sharing the same apex
+    // (true focus): a fixed "primary" cone (the aperture edge, coaxial with the
+    // sensor -- that's rOuterArcsec above), and a "secondary" cone (the obstruction
+    // shadow) whose axis is tilted by the collimation error. A ray is blocked if its
+    // direction from the apex falls inside the secondary's cone. donutCollimDx/Dy
+    // give the hole's offset (arcsec) at exactly 1 tick of defocus on the
+    // extra-focal side; the intra-focal side is simply the cone's other nappe, so it
+    // gets the mirror-image offset for free -- no separate sign flip needed, and the
+    // offset scales with defocus amount instead of staying a fixed arcsec value,
+    // matching how a real angular misalignment behaves.
+    float const coneAxisX = m_Cfg.donutCollimDx;
+    float const coneAxisY = m_Cfg.donutCollimDy;
+    float const coneAxisLenSq = coneAxisX * coneAxisX + coneAxisY * coneAxisY + 1.0f;
+    float const tanInner = m_Cfg.donutDefocusSlope * m_Cfg.donutObstruction;
+    float const cosInnerSq = 1.0f / (1.0f + tanInner * tanInner);
+    float const focusSide = m_Cfg.donutTicks >= 0.0f ? 1.0f : -1.0f;
 
     // Field coma: displaces each pupil zone (radius rho, 0=center, 1=edge) by an
     // amount growing with rho^2, with the classic Seidel angular pattern relative to
@@ -285,14 +292,17 @@ int SkyRenderer::drawDonutStar(INDI::CCDChip *chip, float mag, float x, float y,
             float const theta = 2.0f * static_cast<float>(M_PI) * static_cast<float>(it) / static_cast<float>(nTheta);
 
             // Nominal (defocus-only) landing position -- used only to test whether
-            // this ray is physically blocked by the (collimation-shifted) secondary.
+            // this ray is physically blocked by the (tilted) secondary shadow cone.
             float const p0x = rOuterArcsec * rho * std::cos(theta);
             float const p0y = rOuterArcsec * rho * std::sin(theta);
 
-            float const dHoleX = p0x - shadowOffsetX;
-            float const dHoleY = p0y - shadowOffsetY;
-            if (std::sqrt(dHoleX * dHoleX + dHoleY * dHoleY) < rInnerArcsec)
-                continue;
+            float const rayX = m_Cfg.donutDefocusSlope * rho * std::cos(theta);
+            float const rayY = m_Cfg.donutDefocusSlope * rho * std::sin(theta);
+            float const rayZ = focusSide;
+            float const dot = rayX * coneAxisX + rayY * coneAxisY + rayZ;
+            float const rayLenSq = rayX * rayX + rayY * rayY + rayZ * rayZ;
+            if (dot > 0.0f && dot * dot > cosInnerSq * rayLenSq * coneAxisLenSq)
+                continue; // inside the secondary's shadow cone
 
             // Actual landing position: defocus plus the coma term above.
             float landX = p0x;

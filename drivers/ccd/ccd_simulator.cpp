@@ -185,7 +185,7 @@ bool CCDSim::initProperties()
     // a scope collimated to within 60" would already be a good result.
     DonutSimulationNP[SIM_DONUT_COLLIM_DX].fill("SIM_DONUT_COLLIM_DX", "Collimation Error X (arcsec)", "%4.2f", -600, 600, 5, 0);
     DonutSimulationNP[SIM_DONUT_COLLIM_DY].fill("SIM_DONUT_COLLIM_DY", "Collimation Error Y (arcsec)", "%4.2f", -600, 600, 5, 0);
-    DonutSimulationNP[SIM_DONUT_COMA].fill("SIM_DONUT_COMA", "Field Coma Coefficient", "%4.2f", 0, 100, 1, 0);
+    DonutSimulationNP[SIM_DONUT_COMA].fill("SIM_DONUT_COMA", "Field Coma Coefficient", "%4.2f", 0, 2000, 10, 0);
     DonutSimulationNP.fill(getDeviceName(), "SIM_DONUT", "Donut Simulation",
                            SIMULATOR_TAB, IP_RW, 60, IPS_IDLE);
 
