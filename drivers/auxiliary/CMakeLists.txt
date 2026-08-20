@@ -26,6 +26,14 @@ add_executable(indi_wanderer_eclipse ${indi_wanderer_eclipse_SRC})
 target_link_libraries(indi_wanderer_eclipse indidriver)
 install(TARGETS indi_wanderer_eclipse RUNTIME DESTINATION bin)
 
+# ########## Wanderer ETA M54###############
+SET(indi_wanderer_eta_SRC
+    wanderer_eta.cpp)
+
+add_executable(indi_wanderer_eta ${indi_wanderer_eta_SRC})
+target_link_libraries(indi_wanderer_eta indidriver)
+install(TARGETS indi_wanderer_eta RUNTIME DESTINATION bin)
+
 # ########## Astrolink-4###############
 SET(indi_astrolink4_SRC
     indi_astrolink4.cpp)
@@ -142,6 +150,30 @@ SET(dustcoversimulator_SRC
 add_executable(indi_simulator_dustcover ${dustcoversimulator_SRC})
 target_link_libraries(indi_simulator_dustcover indidriver)
 install(TARGETS indi_simulator_dustcover RUNTIME DESTINATION bin)
+
+# ########## PAC Simulator (Polar Alignment Correction) ###############
+SET(pacsimulator_SRC
+    pac_simulator.cpp)
+
+add_executable(indi_simulator_pac ${pacsimulator_SRC})
+target_link_libraries(indi_simulator_pac indidriver)
+install(TARGETS indi_simulator_pac RUNTIME DESTINATION bin)
+
+# ########## Avalon UPAS (Universal Polar Alignment System) ###############
+SET(avalon_upas_SRC
+    avalon_upas.cpp)
+
+add_executable(indi_avalon_upas ${avalon_upas_SRC})
+target_link_libraries(indi_avalon_upas indidriver)
+install(TARGETS indi_avalon_upas RUNTIME DESTINATION bin)
+
+# ########## MLAstro RPA (Robotic Polar Alignment) ###############
+SET(mlastro_rpa_SRC
+    mlastro_rpa.cpp)
+
+add_executable(indi_mlastro_rpa ${mlastro_rpa_SRC})
+target_link_libraries(indi_mlastro_rpa indidriver)
+install(TARGETS indi_mlastro_rpa RUNTIME DESTINATION bin)
 
 
 # ########## RB Focus Excalibur ###############
@@ -314,3 +346,43 @@ SET(gemini_flatpanel_SRC
 add_executable(indi_gemini_flatpanel ${gemini_flatpanel_SRC})
 target_link_libraries(indi_gemini_flatpanel indidriver)
 install(TARGETS indi_gemini_flatpanel RUNTIME DESTINATION bin)
+
+# ########## Pegasus Flatmaster ###############
+SET(pegasus_flatmaster_SRC
+    pegasus_flatmaster.cpp)
+
+add_executable(indi_pegasus_flatmaster ${pegasus_flatmaster_SRC})
+target_link_libraries(indi_pegasus_flatmaster indidriver)
+install(TARGETS indi_pegasus_flatmaster RUNTIME DESTINATION bin)
+
+# ########## Pegasus Flatmaster Neo ###############
+SET(pegasus_flatmaster_neo_SRC
+    pegasus_flatmaster_neo.cpp)
+
+add_executable(indi_pegasus_flatmaster_neo ${pegasus_flatmaster_neo_SRC})
+target_link_libraries(indi_pegasus_flatmaster_neo indidriver)
+install(TARGETS indi_pegasus_flatmaster_neo RUNTIME DESTINATION bin)
+
+# ########## Pegasus Flatmaster WiFi ###############
+SET(pegasus_flatmaster_wifi_SRC
+    pegasus_flatmaster_wifi.cpp)
+
+add_executable(indi_pegasus_flatmaster_wifi ${pegasus_flatmaster_wifi_SRC})
+target_link_libraries(indi_pegasus_flatmaster_wifi indidriver)
+install(TARGETS indi_pegasus_flatmaster_wifi RUNTIME DESTINATION bin)
+
+# ########## StarTech 7-Port Managed USB Hub ###############
+SET(startech_hub_SRC
+    startech_hub.cpp)
+
+add_executable(indi_startech_hub ${startech_hub_SRC})
+target_link_libraries(indi_startech_hub indidriver)
+install(TARGETS indi_startech_hub RUNTIME DESTINATION bin)
+
+# ########## Wake-on-LAN ###############
+SET(wake_on_lan_SRC
+    wake_on_lan.cpp)
+
+add_executable(indi_wake_on_lan ${wake_on_lan_SRC})
+target_link_libraries(indi_wake_on_lan indidriver)
+install(TARGETS indi_wake_on_lan RUNTIME DESTINATION bin)

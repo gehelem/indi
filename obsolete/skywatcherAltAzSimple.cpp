@@ -530,7 +530,7 @@ void SkywatcherAltAzSimple::UpdateScopeConfigSwitch()
     XMLEle *CurrentXmlNode = nullptr;
     XMLAtt *Ap             = nullptr;
     bool DeviceFound       = false;
-    char ErrMsg[512];
+    char ErrMsg[XML_ERROR_SIZE];
 
     RootXmlNode = readXMLFile(FilePtr, XmlHandle, ErrMsg);
     delLilXML(XmlHandle);
@@ -600,16 +600,19 @@ void SkywatcherAltAzSimple::UpdateScopeConfigSwitch()
             // The config is not used yet
             if (!Found)
             {
-                strncpy(configSwitch->label, ("Config #" + std::to_string(i) + " - Not used").c_str(), MAXINDILABEL);
+                snprintf(configSwitch->label, MAXINDILABEL, "%s",
+                         ("Config #" + std::to_string(i) + " - Not used").c_str());
                 continue;
             }
             // Empty switch label
             if (ConfigName.empty())
             {
-                strncpy(configSwitch->label, ("Config #" + std::to_string(i) + " - Untitled").c_str(), MAXINDILABEL);
+                snprintf(configSwitch->label, MAXINDILABEL, "%s",
+                         ("Config #" + std::to_string(i) + " - Untitled").c_str());
                 continue;
             }
-            strncpy(configSwitch->label, ("Config #" + std::to_string(i) + " - " + ConfigName).c_str(), MAXINDILABEL);
+            snprintf(configSwitch->label, MAXINDILABEL, "%s",
+                     ("Config #" + std::to_string(i) + " - " + ConfigName).c_str());
         }
     }
     delXMLEle(RootXmlNode);

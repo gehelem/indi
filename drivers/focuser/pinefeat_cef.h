@@ -31,22 +31,23 @@ class PinefeatCEF : public INDI::Focuser
         PinefeatCEF();
         ~PinefeatCEF() override = default;
 
-        const char * getDefaultName() override;
         bool initProperties() override;
         bool updateProperties() override;
         bool ISNewNumber(const char * dev, const char * name, double values[], char * names[], int n) override;
         bool ISNewSwitch(const char * dev, const char * name, ISState * states, char * names[], int n) override;
+        void TimerHit() override;
 
     protected:
+        const char * getDefaultName() override;
         bool Handshake() override;
         IPState MoveAbsFocuser(uint32_t targetTicks) override;
         IPState MoveRelFocuser(FocusDirection dir, uint32_t ticks) override;
         bool SetFocuserSpeed(int speed) override;
-        void TimerHit() override;
 
     private:
-        bool updateProperties(const int32_t pos, const std::string dist, const std::string aper);
+        void updateProperties(const int32_t pos, const int32_t max, const std::string dist, const std::string aper);
         bool readFocusPosition(int32_t &pos);
+        bool readFocusMaxPosition(int32_t &pos);
         bool readFocusDistance(std::string &result);
         bool readApertureRange(std::string &result);
         bool readFirmwareVersion();
@@ -77,6 +78,8 @@ class PinefeatCEF : public INDI::Focuser
 
         INDI::PropertyText FocusDistanceTP {1};
 
+        INDI::PropertyText FirmwareTP {1};
+
         // CEF Buffer Size
         static const uint8_t CEF_BUF { 16 };
 
@@ -87,4 +90,6 @@ class PinefeatCEF : public INDI::Focuser
         static const uint8_t CEF_TIMEOUT { 3 };
 
         std::chrono::steady_clock::time_point lastUpdate;
+
+        uint16_t firmwareMinor {0};
 };

@@ -418,130 +418,26 @@ bool SestoSenso2::getModel(std::string &model)
 }
 
 /******************************************************************************************************
- * Get SubModel for SestoSenso3 variants
-*******************************************************************************************************/
-bool SestoSenso2::getSubModel(std::string &submodel)
+ * ===== SESTOSENSO 2 Calibration Methods =====
+ *******************************************************************************************************/
+bool SestoSenso2::initCalibration()
 {
-    json jsonRequest = {{"req", {{"srv", {{"GET_MODEL_SUBMODEL", ""}}}}}};
-    json jsonResponse;
-    
-    if (m_Communication->sendRequest(jsonRequest, &jsonResponse))
-    {
-        try
-        {
-            std::string response;
-            jsonResponse["srv"]["GET_MODEL_SUBMODEL"].get_to(response);
-            
-            // Parse: "Model = SESTOSENSO3, SubModel = SESTOSENSO3SC, ARCO = Not enabled"
-            size_t subModelPos = response.find("SubModel = ");
-            if (subModelPos != std::string::npos)
-            {
-                subModelPos += 11; // Length of "SubModel = "
-                size_t commaPos = response.find(",", subModelPos);
-                if (commaPos != std::string::npos)
-                {
-                    submodel = response.substr(subModelPos, commaPos - subModelPos);
-                }
-                else
-                {
-                    // No comma found, take until end of string
-                    submodel = response.substr(subModelPos);
-                }
-                return true;
-            }
-        }
-        catch (json::exception &e)
-        {
-            LOGF_ERROR("Error parsing submodel response: %s", e.what());
-        }
-    }
-    return false;
+    return m_Communication->command(MOT_1, {{"CAL_FOCUSER", "Init"}});
 }
 
-bool SestoSenso2::storeAsMaxPosition()
-{
-    return m_Communication->command(MOT_1, {{"CAL_FOCUSER", "StoreAsMaxPos-Manual"}});
-}
-
-/******************************************************************************************************
- *
-*******************************************************************************************************/
-bool SestoSenso2::storeAsMinPosition()
-{
-    return m_Communication->command(MOT_1, {{"CAL_FOCUSER", "StoreAsMinPos"}});
-}
-
-/******************************************************************************************************
- *
-*******************************************************************************************************/
 bool SestoSenso2::goOutToFindMaxPos()
 {
     return m_Communication->command(MOT_1, {{"CAL_FOCUSER", "GoOutToFindMaxPos"}});
 }
 
-/******************************************************************************************************
- *
-*******************************************************************************************************/
-bool SestoSenso2::initCalibration()
-{
-    return m_Communication->command(MOT_1, {{"CAL_FOCUSER", "Init-Manual"}});
-}
-
-// SestoSenso3 Specific Calibration
-bool SestoSenso2::initSemiAutoCalibration()
-{
-    return m_Communication->command(MOT_1, {{"CAL_FOCUSER", "Init"}});
-}
-
-bool SestoSenso2::goInToFindMinPos()
-{
-    return m_Communication->command(MOT_1, {{"CAL_FOCUSER", "GoInToFindMinPos"}});
-}
-
-bool SestoSenso2::stopMotor()
-{
-    return m_Communication->command(MOT_1, {{"CAL_FOCUSER", "StopMotor"}});
-}
-
-bool SestoSenso2::moveIn(uint32_t steps)
-{
-    return m_Communication->command(MOT_1, {{"CAL_FOCUSER", "MoveIn-" + std::to_string(steps)}});
-}
-
-bool SestoSenso2::moveOut(uint32_t steps)
-{
-    return m_Communication->command(MOT_1, {{"CAL_FOCUSER", "MoveOut-" + std::to_string(steps)}});
-}
-
-bool SestoSenso2::goOutToFindMaxPosSemiAuto()
-{
-    return m_Communication->command(MOT_1, {{"CAL_FOCUSER", "GoOutToFindMaxPos"}});
-}
-
-bool SestoSenso2::storeAsMaxPosSemiAuto()
+bool SestoSenso2::storeAsMaxPosition()
 {
     return m_Communication->command(MOT_1, {{"CAL_FOCUSER", "StoreAsMaxPos"}});
 }
 
-bool SestoSenso2::startAutoCalibration()
+bool SestoSenso2::storeAsMinPosition()
 {
-    return m_Communication->command(MOT_1, {{"CAL_FOCUSER", "start_auto_cal"}});
-}
-
-bool SestoSenso2::stopCalibration()
-{
-    return m_Communication->command(MOT_1, {{"CAL_FOCUSER", "stop_calib"}});
-}
-
-// SestoSenso3 Recovery Delay
-bool SestoSenso2::setRecoveryDelay(int32_t delay)
-{
-    return m_Communication->set(GENERIC_NODE, {{"RECOVER_DELAY", delay}});
-}
-
-bool SestoSenso2::getRecoveryDelay(int32_t &delay)
-{
-    return m_Communication->get(GENERIC_NODE, "RECOVER_DELAY", delay);
+    return m_Communication->command(MOT_1, {{"CAL_FOCUSER", "StoreAsMinPos"}});
 }
 
 /******************************************************************************************************
@@ -646,6 +542,204 @@ bool SestoSenso2::setMotorCurrents(const MotorCurrents &currents)
 bool SestoSenso2::setMotorHold(bool hold)
 {
     return m_Communication->set(MOT_1, {{"HOLDCURR_STATUS", hold ? 1 : 0}});
+}
+
+/******************************************************************************************************
+ * SestoSenso3 functions
+*******************************************************************************************************/
+SestoSenso3::SestoSenso3(const std::string &name, int port) : Focuser(name, port)
+{
+}
+
+bool SestoSenso3::goAbsolutePosition(uint32_t position)
+{
+    return m_Communication->command(MOT_1, {{"GOTO", position}});
+}
+
+bool SestoSenso3::isBusy()
+{
+    json status;
+    if (m_Communication->get(MOT_1, "STATUS", status))
+    {
+        bool busy = (status["BUSY"] == 1);
+        std::string mst;
+        if (status.contains("MST"))
+            status["MST"].get_to(mst);
+        // Motor is still moving if BUSY=1, or if MST is not yet "stop".
+        // The SS3 can transiently assert BUSY=0 while MST is still
+        // "CstSpeed" or "dec" during encoder-feedback transitions.
+        bool motorStopped = mst.empty() || (mst == "stop");
+        return busy || !motorStopped;
+    }
+    return false;
+}
+
+bool SestoSenso3::getAbsolutePosition(uint32_t &position)
+{
+    return m_Communication->get(MOT_1, "ABS_POS_STEP", position);
+}
+
+bool SestoSenso3::getModel(std::string &model)
+{
+    return m_Communication->get(GENERIC_NODE, "MODNAME", model);
+}
+
+bool SestoSenso3::getSubModel(std::string &submodel)
+{
+    json jsonRequest = {{"req", {{"srv", {{"GET_MODEL_SUBMODEL", ""}}}}}};
+    json jsonResponse;
+
+    if (m_Communication->sendRequest(jsonRequest, &jsonResponse))
+    {
+        try
+        {
+            std::string response;
+            jsonResponse["srv"]["GET_MODEL_SUBMODEL"].get_to(response);
+
+            size_t subModelPos = response.find("SubModel = ");
+            if (subModelPos != std::string::npos)
+            {
+                subModelPos += 11;
+                size_t commaPos = response.find(",", subModelPos);
+                if (commaPos != std::string::npos)
+                    submodel = response.substr(subModelPos, commaPos - subModelPos);
+                else
+                    submodel = response.substr(subModelPos);
+                return true;
+            }
+        }
+        catch (json::exception &e)
+        {
+            LOGF_ERROR("Error parsing submodel response: %s", e.what());
+        }
+    }
+    return false;
+}
+
+bool SestoSenso3::setRecoveryDelay(int32_t delay)
+{
+    return m_Communication->set(GENERIC_NODE, {{"RECOVER_DELAY", delay}});
+}
+
+bool SestoSenso3::getRecoveryDelay(int32_t &delay)
+{
+    return m_Communication->get(GENERIC_NODE, "RECOVER_DELAY", delay);
+}
+
+bool SestoSenso3::getMotorSettings(MotorRates &rates, MotorCurrents &currents, bool &motorHoldActive)
+{
+    json jsonRequest = {{"req", {{"get", {{"MOT1", { {"FnRUN_ACC", ""},
+                                {"FnRUN_DEC", ""}, {"FnRUN_SPD", ""}, {"FnRUN_CURR_ACC", ""},
+                                {"FnRUN_CURR_DEC", ""}, {"FnRUN_CURR_SPD", ""}, {"FnRUN_CURR_HOLD", ""}, {"HOLDCURR_STATUS", ""}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    };
+    json jsonResponse;
+
+    if (m_Communication->sendRequest(jsonRequest, &jsonResponse))
+    {
+        jsonResponse["get"]["MOT1"]["FnRUN_ACC"].get_to(rates.accRate);
+        jsonResponse["get"]["MOT1"]["FnRUN_DEC"].get_to(rates.decRate);
+        jsonResponse["get"]["MOT1"]["FnRUN_SPD"].get_to(rates.runSpeed);
+
+        jsonResponse["get"]["MOT1"]["FnRUN_CURR_ACC"].get_to(currents.accCurrent);
+        jsonResponse["get"]["MOT1"]["FnRUN_CURR_DEC"].get_to(currents.decCurrent);
+        jsonResponse["get"]["MOT1"]["FnRUN_CURR_SPD"].get_to(currents.runCurrent);
+        jsonResponse["get"]["MOT1"]["FnRUN_CURR_HOLD"].get_to(currents.holdCurrent);
+
+        int status = 0;
+        jsonResponse["get"]["MOT1"]["HOLDCURR_STATUS"].get_to(status);
+        motorHoldActive = (status == 1);
+        return true;
+    }
+    return false;
+}
+
+bool SestoSenso3::setMotorRates(const MotorRates &rates)
+{
+    json jsonRates =
+    {
+        {"FnRUN_ACC", rates.accRate},
+        {"FnRUN_DEC", rates.decRate},
+        {"FnRUN_SPD", rates.runSpeed},
+    };
+    return m_Communication->set(MOT_1, jsonRates);
+}
+
+bool SestoSenso3::setMotorCurrents(const MotorCurrents &currents)
+{
+    json jsonCurrents =
+    {
+        {"FnRUN_CURR_ACC", currents.accCurrent},
+        {"FnRUN_CURR_DEC", currents.decCurrent},
+        {"FnRUN_CURR_SPD", currents.runCurrent},
+        {"FnRUN_CURR_HOLD", currents.holdCurrent},
+    };
+    return m_Communication->set(MOT_1, jsonCurrents);
+}
+
+bool SestoSenso3::setMotorHold(bool hold)
+{
+    return m_Communication->set(MOT_1, {{"HOLDCURR_STATUS", hold ? 1 : 0}});
+}
+
+bool SestoSenso3::applyMotorPreset(const std::string &name)
+{
+    return m_Communication->command(GENERIC_NODE, {{"RUNPRESET", name}});
+}
+
+bool SestoSenso3::initCalibrationSemiAuto()
+{
+    return m_Communication->command(MOT_1, {{"CAL_FOCUSER", "Init"}});
+}
+
+bool SestoSenso3::goInToFindMinPos()
+{
+    return m_Communication->command(MOT_1, {{"CAL_FOCUSER", "GoInToFindMinPos"}});
+}
+
+bool SestoSenso3::goOutToFindMaxPos()
+{
+    return m_Communication->command(MOT_1, {{"CAL_FOCUSER", "GoOutToFindMaxPos"}});
+}
+
+bool SestoSenso3::stopMotor()
+{
+    return m_Communication->command(MOT_1, {{"CAL_FOCUSER", "StopMotor"}});
+}
+
+bool SestoSenso3::storeAsMinPosition()
+{
+    return m_Communication->command(MOT_1, {{"CAL_FOCUSER", "StoreAsMinPos"}});
+}
+
+bool SestoSenso3::storeAsMaxPosition()
+{
+    return m_Communication->command(MOT_1, {{"CAL_FOCUSER", "StoreAsMaxPos"}});
+}
+
+bool SestoSenso3::moveIn(uint32_t steps)
+{
+    return m_Communication->command(MOT_1, {{"CAL_FOCUSER", "MoveIn-" + std::to_string(steps)}});
+}
+
+bool SestoSenso3::moveOut(uint32_t steps)
+{
+    return m_Communication->command(MOT_1, {{"CAL_FOCUSER", "MoveOut-" + std::to_string(steps)}});
+}
+
+bool SestoSenso3::startAutoCalibration()
+{
+    return m_Communication->command(MOT_1, {{"CAL_FOCUSER", "start_auto_cal"}});
+}
+
+bool SestoSenso3::stopCalibration()
+{
+    return m_Communication->command(MOT_1, {{"CAL_FOCUSER", "stop_calib"}});
 }
 
 /******************************************************************************************************

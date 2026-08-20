@@ -155,6 +155,16 @@ add_executable(indi_sestosenso2_focus ${sesto2_SRC})
 target_link_libraries(indi_sestosenso2_focus indidriver ${JSONLIB})
 install(TARGETS indi_sestosenso2_focus RUNTIME DESTINATION bin)
 
+# ############### Sesto Senso 3 Focuser ################
+SET(sesto3_SRC
+    sestosenso3.cpp
+    primalucacommandset.cpp
+)
+
+add_executable(indi_sestosenso3_focus ${sesto3_SRC})
+target_link_libraries(indi_sestosenso3_focus indidriver ${JSONLIB})
+install(TARGETS indi_sestosenso3_focus RUNTIME DESTINATION bin)
+
 # ############### Esatto Focuser ################
 SET(esatto_SRC
     esatto.cpp
@@ -371,7 +381,7 @@ target_link_libraries(indi_tcfs_focus indidriver)
 install(TARGETS indi_tcfs_focus RUNTIME DESTINATION bin)
 
 file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/make_tcfs_symlink.cmake
-    "exec_program(\"${CMAKE_COMMAND}\" ARGS -E create_symlink indi_tcfs_focus \$ENV{DESTDIR}${BIN_INSTALL_DIR}/indi_tcfs3_focus)\n")
+	"execute_process(COMMAND \"${CMAKE_COMMAND}\" -E create_symlink indi_tcfs_focus \$ENV{DESTDIR}${BIN_INSTALL_DIR}/indi_tcfs3_focus)\n")
 set_target_properties(indi_tcfs_focus PROPERTIES POST_INSTALL_SCRIPT ${CMAKE_CURRENT_BINARY_DIR}/make_tcfs_symlink.cmake)
 
 # ############### Lacerta MFOC Focuser ################
@@ -400,3 +410,27 @@ add_executable(indi_activefocuser_focus ${activefocuser_SRC})
 
 target_link_libraries(indi_activefocuser_focus indidriver ${HIDAPILIB})
 install(TARGETS indi_activefocuser_focus RUNTIME DESTINATION bin)
+# ############### Alpaca Focuser ################
+SET(alpaca_focuser_SRC
+    indi_alpaca_focuser.cpp)
+
+add_executable(indi_alpaca_focuser ${alpaca_focuser_SRC})
+target_link_libraries(indi_alpaca_focuser indidriver ${HTTPLIB_LIBRARY})
+install(TARGETS indi_alpaca_focuser RUNTIME DESTINATION bin)
+
+# ############### Askar WAF Focuser ################
+SET(askar_waf_SRC
+    askar_waf.cpp)
+
+add_executable(indi_askar_waf_focus ${askar_waf_SRC})
+target_link_libraries(indi_askar_waf_focus indidriver)
+install(TARGETS indi_askar_waf_focus RUNTIME DESTINATION bin)
+
+# ############### IKun Focuser ################
+set(ikunfocuser_SRC
+    ikunfocuser.cpp
+    ikunfocuser_protocol.cpp)
+
+add_executable(indi_ikun_focuser ${ikunfocuser_SRC})
+target_link_libraries(indi_ikun_focuser indidriver)
+install(TARGETS indi_ikun_focuser RUNTIME DESTINATION bin)

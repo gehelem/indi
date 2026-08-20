@@ -92,15 +92,10 @@ class PegasusSPB : public INDI::DefaultDevice, public INDI::WeatherInterface, pu
         };
         enum
         {
-            SENSOR_VOLTAGE,
-            SENSOR_CURRENT,
             SENSOR_AVG_AMPS,
             SENSOR_AMP_HOURS,
             SENSOR_WATT_HOURS,
-            SENSOR_TOTAL_CURRENT,
-            SENSOR_12V_CURRENT,
-            SENSOR_DEWA_CURRENT,
-            SENSOR_DEWB_CURRENT
+            SENSOR_EXT_N
         };
     protected:
         const char *getDefaultName() override;
@@ -113,6 +108,12 @@ class PegasusSPB : public INDI::DefaultDevice, public INDI::WeatherInterface, pu
         virtual bool SetLEDEnabled(bool enabled) override;
         virtual bool SetAutoDewEnabled(size_t port, bool enabled) override;
         virtual bool SetUSBPort(size_t port, bool enabled) override;
+
+        // Weather Overrides
+        virtual IPState updateWeather() override
+        {
+            return IPS_OK;
+        }
 
     private:
         bool Handshake();
@@ -130,6 +131,7 @@ class PegasusSPB : public INDI::DefaultDevice, public INDI::WeatherInterface, pu
         int getHumidityOffset();
         bool setTemperatureOffset(int level);
         int getTemperatureOffset();
+        bool getFirmware();
         bool getSensorData();
         bool getConsumptionData();
         bool getMetricsData();
@@ -147,14 +149,21 @@ class PegasusSPB : public INDI::DefaultDevice, public INDI::WeatherInterface, pu
         static constexpr const uint8_t PEGASUS_TIMEOUT {3};
         static constexpr const uint8_t PEGASUS_LEN {128};
         static constexpr const char *ENVIRONMENT_TAB {"Environment"};
+        static constexpr const char *FIRMWARE_TAB {"Firmware"};
         double map(double value, double from1, double to1, double from2, double to2);
 
         ////////////////////////////////////////////////////////////////////////////////////
         /// Main Control
         ////////////////////////////////////////////////////////////////////////////////////
-
-        // Power Sensors
-        INDI::PropertyNumber PowerSensorsNP {9};
+        // Power Statistics
+        INDI::PropertyNumber PowerStatisticsNP {4};
+        enum
+        {
+            STATS_AVG_AMPS,
+            STATS_AMP_HOURS,
+            STATS_WATT_HOURS,
+            STATS_TOTAL_CURRENT
+        };
 
         ////////////////////////////////////////////////////////////////////////////////////
         /// Adjustable Hub
@@ -169,4 +178,14 @@ class PegasusSPB : public INDI::DefaultDevice, public INDI::WeatherInterface, pu
         INDI::PropertyNumber HumidityOffsetNP {1};
         INDI::PropertyNumber TemperatureOffsetNP {1};
 
+        ////////////////////////////////////////////////////////////////////////////////////
+        /// Firmware
+        ////////////////////////////////////////////////////////////////////////////////////
+
+        INDI::PropertyText FirmwareTP {2};
+        enum
+        {
+            FIRMWARE_VERSION,
+            FIRMWARE_UPTIME,
+        };
 };

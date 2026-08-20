@@ -852,6 +852,16 @@ class Telescope : public DefaultDevice
             LOCK_AXIS_1,
             LOCK_AXIS_2
         };
+
+        // Joystick reverse motion and swapping (joystick only, does not affect MoveNS/MoveWE)
+        INDI::PropertySwitch JoystickReverseSP {3};
+        enum
+        {
+            JOYSTICK_REVERSE_NS,
+            JOYSTICK_REVERSE_WE,
+            JOYSTICK_REVERSE_SWAP
+        };
+
         // Pier Side
         INDI::PropertySwitch PierSideSP {2};
 
@@ -984,6 +994,11 @@ class Telescope : public DefaultDevice
 
         float motionDirNSValue {0};
         float motionDirWEValue {0};
+
+        /// True when ready to act on the next SLEWPRESET joystick press.
+        /// Set back to true when mag drops to 0 (joystick released).
+        /// Prevents repeated slew-rate changes caused by jitter while the joystick is held.
+        bool m_slewPresetArmed {true};
 
         bool m_simulatePierSide;    // use setSimulatePierSide and getSimulatePierSide for public access
 

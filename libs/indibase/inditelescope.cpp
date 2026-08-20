@@ -247,6 +247,13 @@ bool Telescope::initProperties()
     LockAxisSP.fill(getDeviceName(), "JOYSTICK_LOCK_AXIS", "Lock Axis", "Joystick", IP_RW,
                     ISR_ATMOST1, 60, IPS_IDLE);
 
+    // Joystick reverse motion and swapping (joystick only)
+    JoystickReverseSP[JOYSTICK_REVERSE_NS].fill("JOYSTICK_REVERSE_NS", "N/S", ISS_OFF);
+    JoystickReverseSP[JOYSTICK_REVERSE_WE].fill("JOYSTICK_REVERSE_WE", "W/E", ISS_OFF);
+    JoystickReverseSP[JOYSTICK_REVERSE_SWAP].fill("JOYSTICK_REVERSE_SWAP", "Swap N/S<->W/E", ISS_OFF);
+    JoystickReverseSP.fill(getDeviceName(), "TELESCOPE_JOYSTICK_REVERSE", "Axis Reverse", "Joystick", IP_RW, ISR_NOFMANY, 60,
+                           IPS_IDLE);
+
     TrackState = SCOPE_IDLE;
 
     setDriverInterface(TELESCOPE_INTERFACE);
@@ -484,20 +491,25 @@ bool Telescope::updateProperties()
                 if (useJoystick[0].getState() == ISS_ON)
                 {
                     defineProperty(MotionControlModeTP);
-                    loadConfig(true, "MOTION_CONTROL_MODE");
                     defineProperty(LockAxisSP);
-                    loadConfig(true, "LOCK_AXIS");
+                    defineProperty(JoystickReverseSP);
+
+                    LockAxisSP.load();
+                    MotionControlModeTP.load();
+                    JoystickReverseSP.load();
                 }
                 else
                 {
                     deleteProperty(MotionControlModeTP);
                     deleteProperty(LockAxisSP);
+                    deleteProperty(JoystickReverseSP);
                 }
             }
             else
             {
                 deleteProperty(MotionControlModeTP);
                 deleteProperty(LockAxisSP);
+                deleteProperty(JoystickReverseSP);
             }
         }
     }
@@ -550,9 +562,9 @@ bool Telescope::ISSnoopDevice(XMLEle *root)
                 const char *elemName = findXMLAttValu(ep, "name");
 
                 if (!strcmp(elemName, "UTC"))
-                    strncpy(utc, pcdataXMLEle(ep), MAXINDITSTAMP);
+                    snprintf(utc, MAXINDITSTAMP, "%s", pcdataXMLEle(ep));
                 else if (!strcmp(elemName, "OFFSET"))
-                    strncpy(offset, pcdataXMLEle(ep), MAXINDITSTAMP);
+                    snprintf(offset, MAXINDITSTAMP, "%s", pcdataXMLEle(ep));
             }
 
             return processTimeInfo(utc, offset);
@@ -654,6 +666,7 @@ bool Telescope::saveConfigItems(FILE *fp)
     controller->saveConfigItems(fp);
     MotionControlModeTP.save(fp);
     LockAxisSP.save(fp);
+    JoystickReverseSP.save(fp);
     SimulatePierSideSP.save(fp);
 
     return true;
@@ -694,7 +707,7 @@ void Telescope::NewRaDec(double ra, double dec)
     }
 
     // RA is in hours, so change the arc-second threshold accordingly.
-    constexpr double RA_NOTIFY_THRESHOLD = EQ_NOTIFY_THRESHOLD/15.0;
+    constexpr double RA_NOTIFY_THRESHOLD = EQ_NOTIFY_THRESHOLD / 15.0;
     if (std::abs(EqNP[AXIS_RA].getValue() - ra) > RA_NOTIFY_THRESHOLD ||
             std::abs(EqNP[AXIS_DE].getValue() - dec) > EQ_NOTIFY_THRESHOLD ||
             EqNP.getState() != lastEqState)
@@ -1570,6 +1583,18 @@ bool Telescope::ISNewSwitch(const char *dev, const char *name, ISState *states, 
                 LOG_INFO("Joystick motion is unlocked.");
             return true;
         }
+
+        ///////////////////////////////////
+        // Joystick Reverse/Swap Motion
+        ///////////////////////////////////
+        if (JoystickReverseSP.isNameMatch(name))
+        {
+            JoystickReverseSP.update(states, names, n);
+            JoystickReverseSP.setState(IPS_OK);
+            JoystickReverseSP.apply();
+            saveConfig(JoystickReverseSP);
+            return true;
+        }
     }
 
     bool rc = controller->ISNewSwitch(dev, name, states, names, n);
@@ -1580,11 +1605,17 @@ bool Telescope::ISNewSwitch(const char *dev, const char *name, ISState *states, 
         {
             defineProperty(MotionControlModeTP);
             defineProperty(LockAxisSP);
+            defineProperty(JoystickReverseSP);
+
+            LockAxisSP.load();
+            MotionControlModeTP.load();
+            JoystickReverseSP.load();
         }
         else
         {
             deleteProperty(MotionControlModeTP);
             deleteProperty(LockAxisSP);
+            deleteProperty(JoystickReverseSP);
         }
 
     }
@@ -2036,7 +2067,7 @@ const char *Telescope::LoadParkXML()
     wordexp_t wexp;
     FILE *fp = nullptr;
     LilXML *lp = nullptr;
-    static char errmsg[512];
+    static char errmsg[XML_ERROR_SIZE];
 
     XMLEle *parkxml = nullptr;
     XMLAtt *ap = nullptr;
@@ -2181,7 +2212,7 @@ bool Telescope::PurgeParkData()
     wordexp_t wexp;
     FILE *fp = nullptr;
     LilXML *lp = nullptr;
-    static char errmsg[512];
+    static char errmsg[XML_ERROR_SIZE];
 
     XMLEle *parkxml = nullptr;
     XMLAtt *ap = nullptr;
@@ -2420,11 +2451,18 @@ void Telescope::processButton(const char *button_n, ISState state)
     }
     else if (!strcmp(button_n, "SLEWPRESETUP"))
     {
-        processSlewPresets(1, 270);
+        // Re-arm the one-shot gate — button events don't pass through the
+        // mag < 0.5 re-arm path that analog joystick pairs use.
+        m_slewPresetArmed = true;
+        // angle=90 (RIGHT) falls in the (45°,225°] "increase-index" branch
+        processSlewPresets(1, 90);
     }
     else if (!strcmp(button_n, "SLEWPRESETDOWN"))
     {
-        processSlewPresets(1, 90);
+        // Re-arm the one-shot gate — same reason as above.
+        m_slewPresetArmed = true;
+        // angle=270 (LEFT) falls in the "decrease-index" branch
+        processSlewPresets(1, 270);
     }
 }
 
@@ -2585,6 +2623,14 @@ void Telescope::processNSWE(double mag, double angle)
             angle = 0;
         }
 
+        // Apply joystick reverse/swap transforms
+        if (JoystickReverseSP[JOYSTICK_REVERSE_SWAP].getState() == ISS_ON)
+            angle = fmod(angle + 90.0, 360.0);
+        if (JoystickReverseSP[JOYSTICK_REVERSE_NS].getState() == ISS_ON)
+            angle = fmod(360.0 - angle, 360.0);
+        if (JoystickReverseSP[JOYSTICK_REVERSE_WE].getState() == ISS_ON)
+            angle = fmod(540.0 - angle, 360.0);
+
         // North
         if (angle > 0 && angle < 180)
         {
@@ -2639,30 +2685,46 @@ void Telescope::processNSWE(double mag, double angle)
 
 void Telescope::processSlewPresets(double mag, double angle)
 {
-    // high threshold, only 1 is accepted
-    if (mag != 1)
+    // mag >= 0.9  → joystick fully deflected → eligible to fire once
+    // mag <  0.5  → joystick near centre     → re-arm for next press
+    // 0.5 ≤ mag < 0.9 → transitional zone   → do nothing
+    if (mag < 0.9)
+    {
+        if (mag < 0.5 && !m_slewPresetArmed)
+            m_slewPresetArmed = true;
         return;
+    }
+
+    // Already fired once for this press – ignore jitter until released.
+    if (!m_slewPresetArmed)
+        return;
+
+    m_slewPresetArmed = false;
 
     size_t currentIndex = SlewRateSP.findOnSwitchIndex();
 
-    // Up
-    if (angle > 0 && angle < 180)
+    // Direction convention (compass angles, N=0°):
+    //   RIGHT (90°) / DOWN (180°)  → angle in (45°, 225°] → increase index
+    //   UP    (0°)  / LEFT (270°)  → angle outside that range → decrease index
+    //
+    // This matches the standard GUI list convention where RIGHT/DOWN moves to
+    // the next (higher-index) item and UP/LEFT moves to the previous item.
+    if (angle > 45 && angle <= 225)
     {
-        if (currentIndex <= 0)
-            return;
-
-        SlewRateSP.reset();
-        SlewRateSP[currentIndex - 1].setState(ISS_ON);
-        SetSlewRate(currentIndex - 1);
-    }
-    // Down
-    else
-    {
+        // Increase index → next (faster) slew rate
         if (currentIndex >= SlewRateSP.count() - 1)
             return;
-
         SlewRateSP.reset();
         SlewRateSP[currentIndex + 1].setState(ISS_ON);
+        SetSlewRate(currentIndex + 1);
+    }
+    else
+    {
+        // Decrease index → previous (slower) slew rate
+        if (currentIndex <= 0)
+            return;
+        SlewRateSP.reset();
+        SlewRateSP[currentIndex - 1].setState(ISS_ON);
         SetSlewRate(currentIndex - 1);
     }
 

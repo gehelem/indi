@@ -947,7 +947,7 @@ bool CCD::ISNewText(const char * dev, const char * name, char * texts[], char * 
                 {
                     LOG_DEBUG("No mount is set. Clearing all mount watchers.");
                     RA = Dec = J2000RA = J2000DE = Latitude = Longitude = Airmass = Azimuth = Altitude =
-                                                       std::numeric_limits<double>::quiet_NaN();
+                            std::numeric_limits<double>::quiet_NaN();
                 }
             }
 
@@ -1026,6 +1026,10 @@ bool CCD::ISNewText(const char * dev, const char * name, char * texts[], char * 
             FITSHeaderTP.update(texts, names, n);
 
             std::string name = FITSHeaderTP[KEYWORD_NAME].getText();
+            std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c)
+            {
+                return std::toupper(c);
+            });
             std::string value = FITSHeaderTP[KEYWORD_VALUE].getText();
             std::string comment = FITSHeaderTP[KEYWORD_COMMENT].getText();
 
@@ -1057,14 +1061,14 @@ bool CCD::ISNewText(const char * dev, const char * name, char * texts[], char * 
                         {
                             auto lValue = std::stol(value);
                             FITSRecord record(name.c_str(), lValue, comment.c_str());
-                            m_CustomFITSKeywords[name.c_str()] = record;
+                            m_CustomFITSKeywords[name] = record;
                         }
                         // Try double
                         else if (std::regex_match(value, checkDouble))
                         {
                             auto dValue = std::stod(value);
                             FITSRecord record(name.c_str(), dValue, 6, comment.c_str());
-                            m_CustomFITSKeywords[name.c_str()] = record;
+                            m_CustomFITSKeywords[name] = record;
                         }
                         // Store as text
                         else
@@ -1073,7 +1077,7 @@ bool CCD::ISNewText(const char * dev, const char * name, char * texts[], char * 
                             // Escape the value since backslashes are reserved /
                             std::replace(value.begin(), value.end(), '/', '\\');
                             FITSRecord record(name.c_str(), value.c_str(), comment.c_str());
-                            m_CustomFITSKeywords[name.c_str()] = record;
+                            m_CustomFITSKeywords[name] = record;
                         }
                     }
                     // In case conversion fails
@@ -1082,13 +1086,13 @@ bool CCD::ISNewText(const char * dev, const char * name, char * texts[], char * 
                         // String
                         std::replace(value.begin(), value.end(), '/', '\\');
                         FITSRecord record(name.c_str(), value.c_str(), comment.c_str());
-                        m_CustomFITSKeywords[name.c_str()] = record;
+                        m_CustomFITSKeywords[name] = record;
                     }
                 }
                 else if (comment.empty() == false)
                 {
                     FITSRecord record(comment.c_str());
-                    m_CustomFITSKeywords[comment.c_str()] = record;
+                    m_CustomFITSKeywords[comment] = record;
                 }
             }
 
@@ -1426,10 +1430,16 @@ bool CCD::ISNewNumber(const char * dev, const char * name, double values[], char
             if (rc == 0)
             {
                 if (TemperatureRampNP[RAMP_SLOPE].getValue() != 0)
+                {
                     m_TemperatureElapsedTimer.start();
+                    m_InitialRampTemperature = TemperatureNP[0].getValue();
+                }
 
                 m_TargetTemperature = values[0];
                 m_TemperatureCheckTimer.start();
+                // Initialize stabilization tracking for warming-up case (can't heat above ambient)
+                m_TemperatureStabilizationValue = TemperatureNP[0].getValue();
+                m_TemperatureStabilizationTimer.start();
                 TemperatureNP.setState(IPS_BUSY);
             }
             else if (rc == 1)
@@ -2061,7 +2071,7 @@ void CCD::addFITSKeywords(CCDChip * targetChip, std::vector<FITSRecord> &fitsKey
     uint32_t subBinX = targetChip->getBinX();
     uint32_t subBinY = targetChip->getBinY();
 
-    strncpy(dev_name, getDeviceName(), MAXINDINAME);
+    snprintf(dev_name, sizeof(dev_name), "%s", getDeviceName());
 
     fitsKeywords.push_back({"EXPTIME", exposureDuration, 6, "Total Exposure Time (s)"});
 
@@ -2305,6 +2315,11 @@ void CCD::addFITSKeywords(CCDChip * targetChip, std::vector<FITSRecord> &fitsKey
     }
 
     fitsKeywords.push_back({"DATE-OBS", exposureStartTime, "UTC start date of observation"});
+
+    // Add all custom keywords next
+    for (auto &record : m_CustomFITSKeywords)
+        fitsKeywords.push_back(record.second);
+
     fitsKeywords.push_back(FITSRecord("Generated by INDI"));
 }
 
@@ -2341,7 +2356,7 @@ bool CCD::ExposureCompletePrivate(CCDChip * targetChip)
 
     // save information used for the fits header
     exposureDuration = targetChip->getExposureDuration();
-    strncpy(exposureStartTime, targetChip->getExposureStartTime(), MAXINDINAME);
+    snprintf(exposureStartTime, sizeof(exposureStartTime), "%s", targetChip->getExposureStartTime());
 
     if(HasDSP())
     {
@@ -2440,10 +2455,6 @@ bool CCD::ExposureCompletePrivate(CCDChip * targetChip)
             std::vector<FITSRecord> fitsKeywords;
 
             addFITSKeywords(targetChip, fitsKeywords);
-
-            // Add all custom keywords next
-            for (auto &record : m_CustomFITSKeywords)
-                fitsKeywords.push_back(record.second);
 
             for (auto &keyword : fitsKeywords)
             {
@@ -2636,13 +2647,18 @@ bool CCD::uploadFile(CCDChip * targetChip, const void * fitsData, size_t totalBy
         std::string prefix = UploadSettingsTP[UPLOAD_PREFIX].getText();
         std::string directory = UploadSettingsTP[UPLOAD_DIR].getText();
 
+        // Expand _HOME_ to this machine's home directory. Clients (e.g. Ekos) cannot
+        // know in advance what the home directory of a remote INDI server is, so they
+        // send the _HOME_ token literally and let the driver resolve it locally.
+        if (const char * home = getenv("HOME"))
+            replace_all(directory, "_HOME_", home);
 
         int maxIndex       = getFileIndex(directory, prefix,
                                           targetChip->FitsBP[0].getFormat());
 
         if (maxIndex < 0)
         {
-            LOGF_ERROR("Error iterating directory %s. %s", UploadSettingsTP[UPLOAD_DIR].getText(),
+            LOGF_ERROR("Error iterating directory %s. %s", directory.c_str(),
                        strerror(errno));
             return false;
         }
@@ -2670,7 +2686,7 @@ bool CCD::uploadFile(CCDChip * targetChip, const void * fitsData, size_t totalBy
             prefix = std::regex_replace(prefix, std::regex("XXX"), prefixIndex);
         }
 
-        std::string imageFileName = std::string(UploadSettingsTP[UPLOAD_DIR].getText()) + "/" + prefix + std::string(
+        std::string imageFileName = directory + "/" + prefix + std::string(
                                         targetChip->FitsBP[0].getFormat());
 
         fp = fopen(imageFileName.c_str(), "w");
@@ -3045,6 +3061,13 @@ int CCD::getFileIndex(const std::string &dir, const std::string &prefix, const s
 {
     INDI_UNUSED(ext);
 
+    // Refuse to operate on an empty directory path — would crash mkpath via unsigned underflow.
+    if (dir.empty())
+    {
+        LOG_ERROR("Upload directory is not set. Please configure the upload directory.");
+        return -1;
+    }
+
     DIR * dpdf = nullptr;
     struct dirent * epdf = nullptr;
     std::vector<std::string> files = std::vector<std::string>();
@@ -3076,15 +3099,16 @@ int CCD::getFileIndex(const std::string &dir, const std::string &prefix, const s
     {
         while ((epdf = readdir(dpdf)))
         {
-            if (strstr(epdf->d_name, prefixIndex.c_str()))
+            // Skip the current and parent directory entries.
+            if (strcmp(epdf->d_name, ".") == 0 || strcmp(epdf->d_name, "..") == 0)
+                continue;
+            // Only collect files whose name contains the (possibly empty) prefix.
+            if (prefixIndex.empty() || strstr(epdf->d_name, prefixIndex.c_str()))
                 files.push_back(epdf->d_name);
         }
     }
     else
-    {
-        closedir(dpdf);
         return -1;
-    }
     int maxIndex = 0;
 
     for (uint32_t i = 0; i < files.size(); i++)
@@ -3094,9 +3118,9 @@ int CCD::getFileIndex(const std::string &dir, const std::string &prefix, const s
         std::string file  = files.at(i);
         std::size_t start = file.find_last_of("_");
         std::size_t end   = file.find_last_of(".");
-        if (start != std::string::npos)
+        if (start != std::string::npos && end != std::string::npos && end > start)
         {
-            index = atoi(file.substr(start + 1, end).c_str());
+            index = atoi(file.substr(start + 1, end - start - 1).c_str());
             if (index > maxIndex)
                 maxIndex = index;
         }
@@ -3146,7 +3170,52 @@ void CCD::checkTemperatureTarget()
             m_TemperatureCheckTimer.stop();
             TemperatureNP.apply();
         }
-        // If we are beyond a minute, check for next step
+        // When warming up, check if temperature has stabilized at ambient limit
+        // TEC coolers cannot heat above ambient, so if the target is warmer and
+        // the temperature stops changing, we declare it stable.
+        else if (m_TargetTemperature > TemperatureNP[0].getValue())
+        {
+            double rampSlope = TemperatureRampNP[RAMP_SLOPE].getValue();
+            if (rampSlope > 0)
+            {
+                // Calculate minimum expected time to traverse the full temperature range
+                double tempDelta = std::abs(m_TargetTemperature - m_InitialRampTemperature);
+                long minTimeToTarget_ms = static_cast<long>((tempDelta / rampSlope) * 60000);
+                if (m_TemperatureElapsedTimer.elapsed() < minTimeToTarget_ms)
+                {
+                    // Ramp still in progress — advance temperature by one step if >= 60s elapsed
+                    if (m_TemperatureElapsedTimer.elapsed() >= 60000)
+                    {
+                        double nextTemperature = std::min(m_TargetTemperature, TemperatureNP[0].getValue() + rampSlope);
+                        m_TemperatureElapsedTimer.restart();
+                        SetTemperature(nextTemperature);
+                    }
+                    return;
+                }
+            }
+
+            // After expected ramp time has elapsed (or no ramp configured),
+            // check if temperature has stabilized at ambient limit.
+            if (std::abs(TemperatureNP[0].getValue() - m_TemperatureStabilizationValue) <= TemperatureRampNP[RAMP_THRESHOLD].getValue())
+            {
+                // If stable for 2+ minutes, declare success (ambient limit reached)
+                if (m_TemperatureStabilizationTimer.elapsed() >= 120000)
+                {
+                    LOGF_INFO("Temperature stabilized at %.2f°C (target %.2f°C not reachable, likely limited by ambient temperature).",
+                              TemperatureNP[0].getValue(), m_TargetTemperature);
+                    TemperatureNP.setState(IPS_OK);
+                    m_TemperatureCheckTimer.stop();
+                    TemperatureNP.apply();
+                }
+            }
+            else
+            {
+                // Temperature still changing — reset stabilization tracking
+                m_TemperatureStabilizationValue = TemperatureNP[0].getValue();
+                m_TemperatureStabilizationTimer.restart();
+            }
+        }
+        // If we are beyond a minute, check for next step (cooling ramp)
         else if (TemperatureRampNP[RAMP_SLOPE].getValue() > 0 && m_TemperatureElapsedTimer.elapsed() >= 60000)
         {
             double nextTemperature = 0;

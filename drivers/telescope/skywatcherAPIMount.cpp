@@ -537,7 +537,7 @@ bool SkywatcherAPIMount::Goto(double ra, double dec)
     // Transform Celestial to Telescope coordinates.
     // We have no good way to estimate how long will the mount takes to reach target (with deceleration,
     // and not just speed). So we will use iterative GOTO once the first GOTO is complete.
-    if (TransformCelestialToTelescope(ra, dec, 0.0, TDV))
+    if (TransformCelestialToTelescopeJD(ra, dec, ln_get_julian_from_sys(), TDV))
     {
         INDI::IEquatorialCoordinates EquatorialCoordinates { 0, 0 };
         AltitudeAzimuthFromTelescopeDirectionVector(TDV, AltAz);
@@ -909,7 +909,7 @@ bool SkywatcherAPIMount::getCurrentRADE(INDI::IHorizontalCoordinates altaz, INDI
     DEBUGF(INDI::AlignmentSubsystem::DBG_ALIGNMENT, "TDV x %lf y %lf z %lf", TDV.x, TDV.y, TDV.z);
 
     double RightAscension, Declination;
-    if (!TransformTelescopeToCelestial(TDV, RightAscension, Declination))
+    if (!TransformTelescopeToCelestialJD(TDV, RightAscension, Declination, ln_get_julian_from_sys()))
     {
         TelescopeDirectionVector RotatedTDV(TDV);
         switch (GetApproximateMountAlignment())
@@ -981,7 +981,7 @@ bool SkywatcherAPIMount::Sync(double ra, double dec)
         INDI::IHorizontalCoordinates AltAz { 0, 0 };
         TelescopeDirectionVector TDV;
 
-        if (TransformCelestialToTelescope(ra, dec, 0.0, TDV))
+        if (TransformCelestialToTelescopeJD(ra, dec, ln_get_julian_from_sys(), TDV))
         {
             AltitudeAzimuthFromTelescopeDirectionVector(TDV, AltAz);
             double OrigAlt = AltAz.altitude;
@@ -1345,10 +1345,11 @@ void SkywatcherAPIMount::ConvertGuideCorrection(double delta_ra, double delta_de
     TelescopeDirectionVector OldTDV;
     TelescopeDirectionVector NewTDV;
 
-    TransformCelestialToTelescope(m_SkyTrackingTarget.rightascension, m_SkyTrackingTarget.declination, 0.0, OldTDV);
+    TransformCelestialToTelescopeJD(m_SkyTrackingTarget.rightascension, m_SkyTrackingTarget.declination,
+                                    ln_get_julian_from_sys(), OldTDV);
     AltitudeAzimuthFromTelescopeDirectionVector(OldTDV, OldAltAz);
-    TransformCelestialToTelescope(m_SkyTrackingTarget.rightascension + delta_ra,
-                                  m_SkyTrackingTarget.declination + delta_dec, 0.0, NewTDV);
+    TransformCelestialToTelescopeJD(m_SkyTrackingTarget.rightascension + delta_ra,
+                                    m_SkyTrackingTarget.declination + delta_dec, ln_get_julian_from_sys(), NewTDV);
     AltitudeAzimuthFromTelescopeDirectionVector(NewTDV, NewAltAz);
     delta_alt = NewAltAz.altitude - OldAltAz.altitude;
     delta_az = NewAltAz.azimuth - OldAltAz.azimuth;
@@ -1614,8 +1615,8 @@ bool SkywatcherAPIMount::trackByRate(AXISID axis, double rate)
     if (AxesStatus[axis].FullStop && rate == 0)
         return true;
     // If rate is zero, or direction changed then we should stop.
-    else if (!AxesStatus[axis].FullStop && (rate == 0 || (AxesStatus[AXIS1].SlewingForward && rate < 0)
-                                            || (!AxesStatus[AXIS1].SlewingForward && rate > 0)))
+    else if (!AxesStatus[axis].FullStop && (rate == 0 || (AxesStatus[axis].SlewingForward && rate < 0)
+                                            || (!AxesStatus[axis].SlewingForward && rate > 0)))
     {
         SlowStop(axis);
         LOGF_DEBUG("Tracking -> %s direction change.", (axis == AXIS1 ? "Axis 1" : "Axis 2"));
@@ -1627,12 +1628,16 @@ bool SkywatcherAPIMount::trackByRate(AXISID axis, double rate)
                           AxisOneEncoderValuesN[MICROSTEPS_PER_ARCSEC].value : AxisTwoEncoderValuesN[MICROSTEPS_PER_ARCSEC].value)));
     auto clockRate = (StepperClockFrequency[axis] / std::max(1u, stepsPerSecond));
 
-    SetClockTicksPerMicrostep(axis, clockRate);
     if (AxesStatus[axis].FullStop)
     {
         LOGF_DEBUG("Tracking -> %s restart.", (axis == AXIS1 ? "Axis 1" : "Axis 2"));
         SetAxisMotionMode(axis, '1', Direction);
+        SetClockTicksPerMicrostep(axis, clockRate);
         StartAxisMotion(axis);
+    }
+    else
+    {
+        SetClockTicksPerMicrostep(axis, clockRate);
     }
 
     return true;
@@ -1674,7 +1679,7 @@ bool SkywatcherAPIMount::trackUsingPID()
     auto de = m_SkyTrackingTarget.declination + AxisOffsetNP[DEOffset].getValue();
     auto JDOffset = AxisOffsetNP[JulianOffset].getValue() / 86400.0;
 
-    if (TransformCelestialToTelescope(ra, de, JDOffset, TDV))
+    if (TransformCelestialToTelescopeJD(ra, de, ln_get_julian_from_sys() + JDOffset, TDV))
     {
         DEBUGF(INDI::AlignmentSubsystem::DBG_ALIGNMENT, "TDV x %lf y %lf z %lf", TDV.x, TDV.y, TDV.z);
         AltitudeAzimuthFromTelescopeDirectionVector(TDV, AltAz);
@@ -1759,7 +1764,7 @@ bool SkywatcherAPIMount::trackUsingPID()
                        Direction == '0' ? "Forward" : "Backward");
 #ifdef DEBUG_PID
             LOGF_DEBUG("Tracking AZ P: %f I: %f D: %f",
-                       m_Controllers[AXIS1]->propotionalTerm(),
+                       m_Controllers[AXIS1]->proportionalTerm(),
                        m_Controllers[AXIS1]->integralTerm(),
                        m_Controllers[AXIS1]->derivativeTerm());
 #endif
@@ -1816,7 +1821,7 @@ bool SkywatcherAPIMount::trackUsingPID()
                        Error[AXIS2] > 0 ? "Forward" : "Backward");
 #ifdef DEBUG_PID
             LOGF_DEBUG("Tracking AZ P: %f I: %f D: %f",
-                       m_Controllers[AXIS2]->propotionalTerm(),
+                       m_Controllers[AXIS2]->proportionalTerm(),
                        m_Controllers[AXIS2]->integralTerm(),
                        m_Controllers[AXIS2]->derivativeTerm());
 #endif
@@ -1871,23 +1876,23 @@ bool SkywatcherAPIMount::trackUsingPredictiveRates()
     }
 
     // Start by transforming tracking target celestial coordinates to telescope coordinates.
-    if (TransformCelestialToTelescope(m_SkyTrackingTarget.rightascension, m_SkyTrackingTarget.declination,
-                                      0, TDV))
+    double JDnow {ln_get_julian_from_sys()};
+    if (TransformCelestialToTelescopeJD(m_SkyTrackingTarget.rightascension, m_SkyTrackingTarget.declination,
+                                        JDnow, TDV))
     {
         // If mount is Alt-Az then that's all we need to do
         AltitudeAzimuthFromTelescopeDirectionVector(TDV, targetMountAxisCoordinates);
-        TransformCelestialToTelescope(m_SkyTrackingTarget.rightascension, m_SkyTrackingTarget.declination,
-                                      JDoffset, futureTDV);
+        TransformCelestialToTelescopeJD(m_SkyTrackingTarget.rightascension, m_SkyTrackingTarget.declination,
+                                        JDnow + JDoffset, futureTDV);
         AltitudeAzimuthFromTelescopeDirectionVector(futureTDV, futureMountAxisCoordinates);
-        TransformCelestialToTelescope(m_SkyTrackingTarget.rightascension, m_SkyTrackingTarget.declination,
-                                      -JDoffset, pastTDV);
+        TransformCelestialToTelescopeJD(m_SkyTrackingTarget.rightascension, m_SkyTrackingTarget.declination,
+                                        JDnow - JDoffset, pastTDV);
         AltitudeAzimuthFromTelescopeDirectionVector(pastTDV, pastMountAxisCoordinates);
 
     }
     // If transformation failed.
     else
     {
-        double JDnow {ln_get_julian_from_sys()};
         INDI::IEquatorialCoordinates EquatorialCoordinates { 0, 0 };
         EquatorialCoordinates.rightascension  = m_SkyTrackingTarget.rightascension;
         EquatorialCoordinates.declination = m_SkyTrackingTarget.declination;
@@ -1975,7 +1980,7 @@ bool SkywatcherAPIMount::trackUsingPredictiveRates()
                    offsetSteps[AXIS_AZ], trackRates[AXIS_AZ]);
 #ifdef DEBUG_PID
         LOGF_DEBUG("Tracking AZ P: %8.1f I: %8.1f D: %8.1f O: %8.1f",
-                   m_Controllers[AXIS_AZ]->propotionalTerm(),
+                   m_Controllers[AXIS_AZ]->proportionalTerm(),
                    m_Controllers[AXIS_AZ]->integralTerm(),
                    m_Controllers[AXIS_AZ]->derivativeTerm(),
                    trackRates[AXIS_AZ] - predRate[AXIS_AZ]);
@@ -2006,7 +2011,7 @@ bool SkywatcherAPIMount::trackUsingPredictiveRates()
                    offsetSteps[AXIS_ALT], trackRates[AXIS_ALT]);
 #ifdef DEBUG_PID
         LOGF_DEBUG("Tracking AL P: %8.1f I: %8.1f D: %8.1f O: %8.1f",
-                   m_Controllers[AXIS_ALT]->propotionalTerm(),
+                   m_Controllers[AXIS_ALT]->proportionalTerm(),
                    m_Controllers[AXIS_ALT]->integralTerm(),
                    m_Controllers[AXIS_ALT]->derivativeTerm(),
                    trackRates[AXIS_ALT] - predRate[AXIS_ALT]);

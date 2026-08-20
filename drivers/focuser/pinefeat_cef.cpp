@@ -34,7 +34,7 @@ static std::unique_ptr<PinefeatCEF> pinefeatCEF(new PinefeatCEF());
 
 PinefeatCEF::PinefeatCEF()
 {
-    setVersion(1, 0);
+    setVersion(1, 1);
 
     FI::SetCapability(FOCUSER_CAN_ABS_MOVE | FOCUSER_CAN_REL_MOVE | FOCUSER_HAS_VARIABLE_SPEED);
 
@@ -84,6 +84,9 @@ bool PinefeatCEF::initProperties()
     FocusDistanceTP[0].fill("FOCUS_DISTANCE", "meter", nullptr);
     FocusDistanceTP.fill(getDeviceName(), "FOCUS_DISTANCE", "Focus Distance", MAIN_CONTROL_TAB, IP_RO, 60, IPS_IDLE);
 
+    FirmwareTP[0].fill("FIRMWARE_VERSION", "Version", "Unknown");
+    FirmwareTP.fill(getDeviceName(), "FIRMWARE_VERSION", "Firmware", INFO_TAB, IP_RO, 0, IPS_IDLE);
+
     serialConnection->setDefaultBaudRate(Connection::Serial::B_115200);
 
     setDefaultPollingPeriod(50);
@@ -97,24 +100,28 @@ bool PinefeatCEF::updateProperties()
 
     if (isConnected())
     {
+        defineProperty(FirmwareTP);
         defineProperty(FocusDistanceTP);
         defineProperty(CalibrateSP);
         defineProperty(ApertureRangeTP);
         defineProperty(ApertureAbsNP);
         defineProperty(ApertureRelNP);
 
-        int32_t pos;
+        int32_t pos, max;
         std::string dist, aper;
-        if (readFocusPosition(pos) &&
-                readFocusDistance(dist) &&
-                readApertureRange(aper) &&
-                updateProperties(pos, dist, aper))
+        if (readFocusPosition(pos)
+                && (max = pos, 1)
+                && readFocusMaxPosition(max)
+                && readFocusDistance(dist)
+                && readApertureRange(aper))
         {
+            updateProperties(pos, max, dist, aper);
             LOG_INFO("Parameters updated, the controller is ready for use.");
         }
     }
     else
     {
+        deleteProperty(FirmwareTP);
         deleteProperty(FocusDistanceTP);
         deleteProperty(CalibrateSP);
         deleteProperty(ApertureRangeTP);
@@ -125,7 +132,7 @@ bool PinefeatCEF::updateProperties()
     return true;
 }
 
-bool PinefeatCEF::updateProperties(const int32_t pos, const std::string dist, const std::string aper)
+void PinefeatCEF::updateProperties(const int32_t pos, const int32_t max, const std::string dist, const std::string aper)
 {
     FocusAbsPosNP[0].setValue(pos);
     FocusAbsPosNP.setState(IPS_OK);
@@ -139,7 +146,7 @@ bool PinefeatCEF::updateProperties(const int32_t pos, const std::string dist, co
 
     if (FocusMaxPosNP.getState() == IPS_BUSY)
     {
-        FocusMaxPosNP[0].setValue(pos);
+        FocusMaxPosNP[0].setValue(max);
         FocusMaxPosNP.setState(IPS_IDLE);
         FocusMaxPosNP.apply();
 
@@ -153,8 +160,6 @@ bool PinefeatCEF::updateProperties(const int32_t pos, const std::string dist, co
 
     ApertureRangeTP[0].setText(aper);
     ApertureRangeTP.apply();
-
-    return true;
 }
 
 bool PinefeatCEF::Handshake()
@@ -180,6 +185,15 @@ bool PinefeatCEF::readFirmwareVersion()
     if (!sendCommand("v\n", res))
         return false;
 
+    int major, minor;
+    if (sscanf(res, "%d.%d", &major, &minor) == 2)
+    {
+        firmwareMinor = minor;
+    }
+
+    FirmwareTP[0].setText(res);
+    FirmwareTP.setState(IPS_OK);
+
     LOGF_INFO("Detected firmware version %s.", res);
 
     return true;
@@ -196,6 +210,28 @@ bool PinefeatCEF::readFocusPosition(int32_t &pos)
     if (rc <= 0)
     {
         LOGF_ERROR("Can't read focus position: %s.", ERR_NC(res));
+        return false;
+    }
+
+    return true;
+}
+
+bool PinefeatCEF::readFocusMaxPosition(int32_t &pos)
+{
+    if (firmwareMinor < 3)
+    {
+        return true;
+    }
+
+    char res[CEF_BUF] = {0};
+
+    if (!sendCommand("r\n", res))
+        return false;
+
+    int rc = sscanf(res, "%*d-%d", &pos);
+    if (rc <= 0)
+    {
+        LOGF_ERROR("Can't read max focus position: %s.", ERR_NC(res));
         return false;
     }
 
@@ -350,6 +386,9 @@ bool PinefeatCEF::ISNewSwitch(const char * dev, const char * name, ISState * sta
 
             if (calibrate())
             {
+                // Delay further update until calibration starter
+                lastUpdate = std::chrono::steady_clock::now();
+
                 FocusAbsPosNP.setState(IPS_BUSY);
                 FocusAbsPosNP.apply();
 
@@ -434,18 +473,18 @@ void PinefeatCEF::TimerHit()
     auto now = std::chrono::steady_clock::now();
     auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - lastUpdate).count();
 
-    if ((elapsed >= 1 ||
-            FocusAbsPosNP.getState() == IPS_BUSY ||
-            FocusRelPosNP.getState() == IPS_BUSY ||
-            FocusMaxPosNP.getState() == IPS_BUSY) &&
-            isNotMoving())
+    if (elapsed >= 1 && isNotMoving())
     {
-        int32_t pos;
+        int32_t pos, max;
         std::string dist, aper;
         if (readFocusPosition(pos)
+                && (max = pos, 1)
+                && readFocusMaxPosition(max)
                 && readFocusDistance(dist)
                 && readApertureRange(aper))
-            updateProperties(pos, dist, aper);
+        {
+            updateProperties(pos, max, dist, aper);
+        }
     }
 
     SetTimer(getCurrentPollingPeriod());
