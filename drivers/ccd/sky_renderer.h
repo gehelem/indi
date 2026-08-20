@@ -12,6 +12,17 @@ struct RenderConfig
     float skyGlow       = 19.5f;    // sky background brightness (magnitudes)
     float tiltLR        = 0.0f;     // Left-to-Right tilt: extra defocus (arcsec) at sensor edge
     float tiltTB        = 0.0f;     // Top-to-Bottom tilt: extra defocus (arcsec) at sensor edge
+
+    // Donut/collimation simulation. donutObstruction == 0 (the default) disables it
+    // entirely: drawImageStar() then renders the plain Gaussian PSF above, untouched.
+    float donutObstruction     = 0.0f;  // secondary obstruction ratio (0..1) of the pupil radius
+    float donutDefocusSlope    = 5.0f;  // pupil-shadow radius growth, arcsec per defocus "tick"
+    float donutBaseSeeing      = 3.5f;  // atmospheric/optical seeing at focus (arcsec); blur kernel sigma source
+    float donutTicks           = 0.0f;  // signed defocus amount (same "tick" unit as donutDefocusSlope)
+    float donutCollimDx        = 0.0f;  // collimation error, X (arcsec); shadow offset flips sign with defocus side
+    float donutCollimDy        = 0.0f;  // collimation error, Y (arcsec)
+    float donutComaCoefficient = 0.0f;  // field coma strength; shadow offset grows with field radius / fRatio^2
+    float fRatio               = 0.0f;  // focal ratio (focal length / aperture), used by the coma term above
 };
 
 // SkyRenderer renders a synthetic sky scene into an INDI::CCDChip frame buffer.
@@ -86,4 +97,5 @@ class SkyRenderer
         double flux(double mag) const;
         int    addToPixel(INDI::CCDChip *, int x, int y, int val);
         void   drawSkyGlow(INDI::CCDChip *, float exp_s);
+        int    drawDonutStar(INDI::CCDChip *, float mag, float x, float y, float exp_s);
 };

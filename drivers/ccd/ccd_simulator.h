@@ -145,6 +145,7 @@ class CCDSim : public INDI::CCD, public INDI::FilterInterface
         float m_LimitingMag   {11.5f};
         float m_SaturationMag {2.0f};
         float m_Seeing        {3.5f};  // arcsec FWHM, updated by focus simulation
+        float m_FocusTicks    {0};     // signed defocus amount (same "ticks" unit as m_Seeing); needed by donut simulation to know the intra/extra-focal side
 
         double TemperatureRequest { 0 };
 
@@ -246,6 +247,20 @@ class CCDSim : public INDI::CCD, public INDI::FilterInterface
         {
             SIM_TILT_LR,
             SIM_TILT_TB
+        };
+
+        // Simulate a defocused "donut" star image (mirror aperture with secondary
+        // obstruction shadow), for testing the Collimator module. Disabled by default
+        // (SIM_DONUT_OBSTRUCTION = 0), in which case rendering is untouched and falls
+        // back to the plain Gaussian PSF used above.
+        INDI::PropertyNumber DonutSimulationNP {5};
+        enum
+        {
+            SIM_DONUT_OBSTRUCTION,     // secondary obstruction ratio (0 = disabled)
+            SIM_DONUT_DEFOCUS_SLOPE,   // pupil-shadow radius growth (arcsec per defocus tick)
+            SIM_DONUT_COLLIM_DX,       // collimation error, X (arcsec)
+            SIM_DONUT_COLLIM_DY,       // collimation error, Y (arcsec)
+            SIM_DONUT_COMA             // field coma coefficient
         };
 
         INDI::PropertyNumber EqPENP {2};

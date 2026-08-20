@@ -178,6 +178,17 @@ bool CCDSim::initProperties()
     TiltSimulationNP.fill(getDeviceName(), "SIM_TILT", "Tilt Simulation",
                           SIMULATOR_TAB, IP_RW, 60, IPS_IDLE);
 
+    // Simulate a defocused "donut" star (mirror + secondary obstruction shadow)
+    DonutSimulationNP[SIM_DONUT_OBSTRUCTION].fill("SIM_DONUT_OBSTRUCTION", "Obstruction Ratio (0=off)", "%4.2f", 0, 1, 0.05, 0);
+    DonutSimulationNP[SIM_DONUT_DEFOCUS_SLOPE].fill("SIM_DONUT_DEFOCUS_SLOPE", "Defocus Slope (arcsec/tick)", "%4.2f", 0, 50, 1, 5.0);
+    // Real-world collimation errors run to several arcminutes, not tens of arcsec --
+    // a scope collimated to within 60" would already be a good result.
+    DonutSimulationNP[SIM_DONUT_COLLIM_DX].fill("SIM_DONUT_COLLIM_DX", "Collimation Error X (arcsec)", "%4.2f", -600, 600, 5, 0);
+    DonutSimulationNP[SIM_DONUT_COLLIM_DY].fill("SIM_DONUT_COLLIM_DY", "Collimation Error Y (arcsec)", "%4.2f", -600, 600, 5, 0);
+    DonutSimulationNP[SIM_DONUT_COMA].fill("SIM_DONUT_COMA", "Field Coma Coefficient", "%4.2f", 0, 100, 1, 0);
+    DonutSimulationNP.fill(getDeviceName(), "SIM_DONUT", "Donut Simulation",
+                           SIMULATOR_TAB, IP_RW, 60, IPS_IDLE);
+
     // Periodic Error
     EqPENP[AXIS_RA].fill("RA_PE", "RA (hh:mm:ss)", "%010.6m", 0, 24, 0, 0);
     EqPENP[AXIS_DE].fill("DEC_PE", "DEC (dd:mm:ss)", "%010.6m", -90, 90, 0, 0);
@@ -320,6 +331,7 @@ void CCDSim::ISGetProperties(const char * dev)
     defineProperty(EqPENP);
     defineProperty(FocusSimulationNP);
     defineProperty(TiltSimulationNP);
+    defineProperty(DonutSimulationNP);
     defineProperty(SimTestsSP);
 
     // Planet simulation properties
@@ -724,6 +736,20 @@ int CCDSim::DrawCcdFrame(INDI::CCDChip * targetChip)
         cfg.tiltTB        = TiltSimulationNP[SIM_TILT_TB].getValue();
         // Sky glow: 30% boost for realistic light-frame backgrounds; flat frames use diffuser daylight level
         cfg.skyGlow = isLight ? m_SkyGlow * 1.3f : m_SkyGlow / 10.0f;
+
+        // Donut/collimation simulation. donutObstruction stays 0 unless the user
+        // explicitly configures it, in which case SkyRenderer keeps drawing the plain
+        // Gaussian PSF above -- this whole block is then inert.
+        cfg.donutObstruction     = DonutSimulationNP[SIM_DONUT_OBSTRUCTION].getValue();
+        cfg.donutDefocusSlope    = DonutSimulationNP[SIM_DONUT_DEFOCUS_SLOPE].getValue();
+        cfg.donutBaseSeeing      = FocusSimulationNP[SIM_SEEING].getValue();
+        cfg.donutTicks           = m_FocusTicks;
+        cfg.donutCollimDx        = DonutSimulationNP[SIM_DONUT_COLLIM_DX].getValue();
+        cfg.donutCollimDy        = DonutSimulationNP[SIM_DONUT_COLLIM_DY].getValue();
+        cfg.donutComaCoefficient = DonutSimulationNP[SIM_DONUT_COMA].getValue();
+        double const aperture = ScopeInfoNP[APERTURE].getValue();
+        cfg.fRatio = aperture > 0 ? static_cast<float>(targetFocalLength / aperture) : 0.0f;
+
         m_Renderer.setConfig(cfg);
 
         std::unique_lock<std::mutex> guard(ccdBufferLock);
@@ -915,6 +941,12 @@ bool CCDSim::ISNewNumber(const char * dev, const char * name, double values[], c
             TiltSimulationNP.update(values, names, n);
             TiltSimulationNP.setState(IPS_OK);
             TiltSimulationNP.apply();
+        }
+        else if (DonutSimulationNP.isNameMatch(name))
+        {
+            DonutSimulationNP.update(values, names, n);
+            DonutSimulationNP.setState(IPS_OK);
+            DonutSimulationNP.apply();
         }
         else if (PlanetSettingsNP.isNameMatch(name))
         {
@@ -1223,6 +1255,7 @@ bool CCDSim::ISSnoopDevice(XMLEle * root)
                 double ticks = 20 * (FocuserPos - focus) / max;
 
                 m_Seeing = 0.5625 * ticks * ticks + optimalFWHM;
+                m_FocusTicks = ticks;
                 return true;
             }
         }
@@ -1314,6 +1347,9 @@ bool CCDSim::saveConfigItems(FILE * fp)
 
     // Tilt simulation
     TiltSimulationNP.save(fp);
+
+    // Donut simulation
+    DonutSimulationNP.save(fp);
 
     // Planet simulation
     PlanetSettingsNP.save(fp);
