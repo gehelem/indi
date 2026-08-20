@@ -182,10 +182,10 @@ int SkyRenderer::drawImageStar(INDI::CCDChip *chip, float mag, float x, float y,
     return drew;
 }
 
-// Render a defocused "donut" star: the geometric shadow of the mirror aperture and
-// its secondary obstruction, softened by a real convolution with the seeing kernel.
-// This is used to test the Collimator module against a known, controllable ground
-// truth (obstruction decentering) instead of a plain Gaussian PSF.
+// Render a defocused "donut" star via geometric ray sampling of the mirror pupil,
+// softened by a real convolution with the seeing kernel. Used to test the Collimator
+// module against a known, controllable ground truth (collimation error, field coma)
+// instead of a plain Gaussian PSF.
 int SkyRenderer::drawDonutStar(INDI::CCDChip *chip, float mag, float x, float y, float exp_s)
 {
     int const subX = chip->getSubX();
@@ -204,17 +204,26 @@ int SkyRenderer::drawDonutStar(INDI::CCDChip *chip, float mag, float x, float y,
     float const rOuterArcsec = m_Cfg.donutDefocusSlope * std::fabs(m_Cfg.donutTicks);
     float const rInnerArcsec = rOuterArcsec * m_Cfg.donutObstruction;
 
-    // Collimation error: a fixed misalignment of the secondary's shadow inside the
-    // pupil, independent of the star's position in the field. It flips sign between
-    // intra- and extra-focal -- that flip is what lets a real collimation tool tell
-    // it apart from the field coma term below, which does not flip.
+    // Collimation error: a fixed shift of the secondary's shadow relative to the
+    // primary aperture, independent of the star's field position. It only affects
+    // which rays are physically blocked (see the exclusion test below), not where an
+    // unblocked ray lands -- a tilted secondary doesn't move the star itself. It
+    // flips sign between intra- and extra-focal, unlike field coma below.
     float const collimSign = m_Cfg.donutTicks >= 0.0f ? 1.0f : -1.0f;
-    float shadowOffsetX = m_Cfg.donutCollimDx * collimSign;
-    float shadowOffsetY = m_Cfg.donutCollimDy * collimSign;
+    float const shadowOffsetX = m_Cfg.donutCollimDx * collimSign;
+    float const shadowOffsetY = m_Cfg.donutCollimDy * collimSign;
 
-    // Field coma: even with perfect collimation, off-axis stars show the same kind
-    // of shadow decentering, pointing toward the image center and growing with field
-    // radius and with a faster (smaller) focal ratio.
+    // Field coma: displaces each pupil zone (radius rho, 0=center, 1=edge) by an
+    // amount growing with rho^2, with the classic Seidel angular pattern relative to
+    // the star's own radial direction in the field ("2 + cos2*theta'" along that
+    // direction, "sin2*theta'" across it). Unlike collimation error, this is applied
+    // to every ray's landing position, not just to the obstruction test -- rays near
+    // the obstruction (small rho) are barely affected, so the hole stays roughly
+    // centered, while the outer rim (rho near 1) gets pulled toward the image center
+    // and bunches up on one side. That's what produces the comet/seagull/"V" shape a
+    // simple decentered ring can never reproduce, no matter its offset.
+    float comaScale = 0.0f;
+    float phi = 0.0f; // direction from the star toward the image center
     if (m_Cfg.donutComaCoefficient != 0.0f && m_Cfg.fRatio > 0.0f)
     {
         float const cx = chip->getXRes() / 2.0f;
@@ -226,10 +235,10 @@ int SkyRenderer::drawDonutStar(INDI::CCDChip *chip, float mag, float x, float y,
 
         if (fieldRadius > 0.0f && halfDiag > 0.0f)
         {
-            float const comaMag = m_Cfg.donutComaCoefficient * (fieldRadius / halfDiag)
-                                  / (m_Cfg.fRatio * m_Cfg.fRatio);
-            shadowOffsetX += -comaMag * (fieldDx / fieldRadius);
-            shadowOffsetY += -comaMag * (fieldDy / fieldRadius);
+            comaScale = m_Cfg.donutComaCoefficient * (fieldRadius / halfDiag) / (m_Cfg.fRatio * m_Cfg.fRatio);
+            // Empirically flipped 180 deg from the naive "toward center" vector: the
+            // Seidel coma sign convention placed the flare on the wrong side.
+            phi = std::atan2(fieldDy, fieldDx);
         }
     }
 
@@ -244,8 +253,11 @@ int SkyRenderer::drawDonutStar(INDI::CCDChip *chip, float mag, float x, float y,
     int const kernelRadiusY = std::max(1, static_cast<int>(std::ceil(3.0f * sigmaY)));
     int const kernelRadius = std::max(kernelRadiusX, kernelRadiusY);
 
-    int const rOuterPx = static_cast<int>(std::ceil(rOuterArcsec / std::min(m_ImageScaleX, m_ImageScaleY)));
-    int const boxRadius = rOuterPx + kernelRadius + 1;
+    // Box sizing: cover the widest possible ray excursion (defocus radius plus the
+    // largest possible coma displacement) with margin for the blur kernel.
+    float const maxExtentArcsec = rOuterArcsec + 3.0f * comaScale;
+    int const outerPx = static_cast<int>(std::ceil(maxExtentArcsec / std::min(m_ImageScaleX, m_ImageScaleY)));
+    int const boxRadius = outerPx + kernelRadius + 1;
     int const boxSize = 2 * boxRadius + 1;
 
     // Sub-pixel centering: keep the fractional part of the star position, same as the
@@ -253,41 +265,70 @@ int SkyRenderer::drawDonutStar(INDI::CCDChip *chip, float mag, float x, float y,
     float const fracX = x - static_cast<int>(x);
     float const fracY = y - static_cast<int>(y);
 
-    // Antialiasing band (arcsec) for the disk edges. Without this, a hard 0/1 test
-    // rasterizes a sub-pixel pupil radius (i.e. right at focus) to an entirely empty
-    // mask -- the star would vanish instead of degrading to a small soft blob.
-    float const edgeWidthArcsec = std::max(0.5f * (m_ImageScaleX + m_ImageScaleY), 1e-3f);
-
     std::vector<float> mask(static_cast<size_t>(boxSize) * boxSize, 0.0f);
     float maskSum = 0.0f;
 
-    for (int sy = -boxRadius; sy <= boxRadius; sy++)
+    // Geometric ray sampling: walk the pupil in polar coordinates (rho, theta) and,
+    // for each unobstructed ray, splat its image-plane landing point into the mask,
+    // weighted by rho (the pupil area element) so the outer, larger-area zones
+    // contribute proportionally more flux than the inner ones, as real uniform
+    // illumination would.
+    int const nTheta = std::clamp(static_cast<int>(std::ceil(2.0f * static_cast<float>(M_PI) * outerPx)), 64, 2000);
+    int const nRho   = std::clamp(outerPx / 3, 8, 64);
+
+    for (int ir = 0; ir < nRho; ir++)
     {
-        for (int sx = -boxRadius; sx <= boxRadius; sx++)
+        float const rho = (static_cast<float>(ir) + 0.5f) / static_cast<float>(nRho);
+
+        for (int it = 0; it < nTheta; it++)
         {
-            float const ddxOuter = m_ImageScaleX * (sx - fracX);
-            float const ddyOuter = m_ImageScaleY * (sy - fracY);
-            float const rOut = std::sqrt(ddxOuter * ddxOuter + ddyOuter * ddyOuter);
+            float const theta = 2.0f * static_cast<float>(M_PI) * static_cast<float>(it) / static_cast<float>(nTheta);
 
-            if (rOut > rOuterArcsec + edgeWidthArcsec)
+            // Nominal (defocus-only) landing position -- used only to test whether
+            // this ray is physically blocked by the (collimation-shifted) secondary.
+            float const p0x = rOuterArcsec * rho * std::cos(theta);
+            float const p0y = rOuterArcsec * rho * std::sin(theta);
+
+            float const dHoleX = p0x - shadowOffsetX;
+            float const dHoleY = p0y - shadowOffsetY;
+            if (std::sqrt(dHoleX * dHoleX + dHoleY * dHoleY) < rInnerArcsec)
                 continue;
 
-            float const ddxInner = ddxOuter - shadowOffsetX;
-            float const ddyInner = ddyOuter - shadowOffsetY;
-            float const rIn = std::sqrt(ddxInner * ddxInner + ddyInner * ddyInner);
+            // Actual landing position: defocus plus the coma term above.
+            float landX = p0x;
+            float landY = p0y;
 
-            if (rIn < rInnerArcsec - edgeWidthArcsec)
-                continue;
+            if (comaScale != 0.0f)
+            {
+                float const thetaLocal = theta - phi;
+                float const comaLocalX = comaScale * rho * rho * (2.0f + std::cos(2.0f * thetaLocal));
+                float const comaLocalY = comaScale * rho * rho * std::sin(2.0f * thetaLocal);
+                landX += comaLocalX * std::cos(phi) - comaLocalY * std::sin(phi);
+                landY += comaLocalX * std::sin(phi) + comaLocalY * std::cos(phi);
+            }
 
-            float const outerCoverage = std::clamp(0.5f + (rOuterArcsec - rOut) / edgeWidthArcsec, 0.0f, 1.0f);
-            float const innerCoverage = std::clamp(0.5f + (rIn - rInnerArcsec) / edgeWidthArcsec, 0.0f, 1.0f);
-            float const value = outerCoverage * innerCoverage;
+            // Bilinear splat into the mask grid.
+            float const gridX = landX / m_ImageScaleX + fracX + boxRadius;
+            float const gridY = landY / m_ImageScaleY + fracY + boxRadius;
+            int const ix0 = static_cast<int>(std::floor(gridX));
+            int const iy0 = static_cast<int>(std::floor(gridY));
+            float const fx = gridX - static_cast<float>(ix0);
+            float const fy = gridY - static_cast<float>(iy0);
 
-            if (value <= 0.0f)
-                continue;
+            int const cornerDx[4] = { 0, 1, 0, 1 };
+            int const cornerDy[4] = { 0, 0, 1, 1 };
+            float const cornerW[4] = { (1.0f - fx) * (1.0f - fy), fx * (1.0f - fy), (1.0f - fx) * fy, fx * fy };
 
-            mask[(sy + boxRadius) * boxSize + (sx + boxRadius)] = value;
-            maskSum += value;
+            for (int c = 0; c < 4; c++)
+            {
+                int const px = ix0 + cornerDx[c];
+                int const py = iy0 + cornerDy[c];
+                if (px < 0 || px >= boxSize || py < 0 || py >= boxSize)
+                    continue;
+                float const contribution = rho * cornerW[c];
+                mask[py * boxSize + px] += contribution;
+                maskSum += contribution;
+            }
         }
     }
 
